@@ -156,46 +156,51 @@
   }
 
   // Initialize on Window Load
-  window.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('tpl-logo-img').src = EMBEDDED_IMAGES.logo;
-    document.getElementById('tpl-signature-img').src = EMBEDDED_IMAGES.signature;
-    document.getElementById('tpl-paid-stamp-img').src = EMBEDDED_IMAGES.paidStamp;
+  var invNumEl = document.getElementById('inp-inv-number');
+    var invDateEl = document.getElementById('inp-inv-date');
+    var syncBadge = document.getElementById('syncBadge');
 
-    var todayIso = new Date().toISOString().slice(0, 10);
-    document.getElementById('inp-inv-date').value = '2026-08-10';
-    document.getElementById('inp-cust-name').value = 'Jain Jijo Augustine';
-    document.getElementById('inp-cust-phone').value = '9946280572';
-    document.getElementById('inp-inv-number').value = 'LL-2026-0001';
-
-    refreshAllViews();
-    scaleInvoicePaperForMobile();
-    window.addEventListener('resize', scaleInvoicePaperForMobile);
-
-    // Fetch live Google Sheets data if running inside Google Apps Script
-    if (APP_STATE.isGasEnv) {
-      document.getElementById('syncBadge').textContent = 'Syncing Sheets...';
-      runBackend('getBootstrapData', undefined, function(res) {
-          if (res && res.success) {
-            APP_STATE.settings = res.settings || APP_STATE.settings;
-            APP_STATE.products = (res.products && res.products.length) ? res.products : APP_STATE.products;
-            APP_STATE.customers = (res.customers && res.customers.length) ? res.customers : APP_STATE.customers;
-            APP_STATE.invoices = (res.invoices && res.invoices.length) ? res.invoices : APP_STATE.invoices;
-            document.getElementById('inp-inv-number').value = res.nextInvoiceNumber || 'LL-2026-0002';
-            document.getElementById('inp-inv-date').value = todayIso;
-            document.getElementById('syncBadge').textContent = 'Sheets Connected';
-            refreshAllViews();
-          } else {
-            document.getElementById('syncBadge').textContent = 'Sheets Error';
-          }
-        })
-        .withFailureHandler(function(err) {
-          document.getElementById('syncBadge').textContent = 'Offline Mode';
-        })
-        .getBootstrapData();
-    } else {
-      document.getElementById('syncBadge').textContent = 'Local Preview';
+    if (invDateEl && !invDateEl.value) invDateEl.value = todayIso;
+    if (invNumEl && !invNumEl.value) {
+      invNumEl.value = formatSeqInvoiceNumber(
+        APP_STATE.settings.InvoicePrefix || 'LL-2026-',
+        APP_STATE.settings.NextInvoiceSequence || 1,
+        APP_STATE.settings.SequencePadding || 4
+      );
     }
-  });
+
+    if (APP_STATE.isGasEnv) {
+      if (syncBadge) syncBadge.textContent = 'Connecting...';
+
+      runBackend('getBootstrapData', undefined, function(res) {
+        if (res && res.success) {
+          APP_STATE.settings = res.settings || APP_STATE.settings;
+          APP_STATE.products = (res.products && res.products.length) ? res.products : APP_STATE.products;
+          APP_STATE.customers = (res.customers && res.customers.length) ? res.customers : APP_STATE.customers;
+          APP_STATE.invoices = (res.invoices && res.invoices.length) ? res.invoices : APP_STATE.invoices;
+
+          if (res.images) {
+            APP_STATE.images.logo = res.images.logo || '';
+            APP_STATE.images.signature = res.images.signature || '';
+            APP_STATE.images.paidStamp = res.images.paidStamp || '';
+            applyImageSources();
+          }
+
+          if (invNumEl) invNumEl.value = res.nextInvoiceNumber || invNumEl.value;
+          if (syncBadge) syncBadge.textContent = 'Sheets Connected';
+          refreshAllViews();
+        } else {
+          if (syncBadge) syncBadge.textContent = 'Sheets Error';
+          showToast((res && res.error) ? res.error : 'Failed to load data from Sheets');
+        }
+      }, function(err) {
+        if (syncBadge) syncBadge.textContent = 'Offline Mode';
+        console.error('getBootstrapData error:', err);
+        showToast('Could not reach Apps Script backend');
+      });
+    } else {
+      if (syncBadge) syncBadge.textContent = 'Local Preview';
+    }:
 
   function refreshAllViews() {
     populateSavedCustomerDropdown();
