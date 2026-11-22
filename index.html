@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Lord Look · Billing</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script async src="https://accounts.google.com/gsi/client"></script>
+  <script async crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="app-header"><div class="brand"><b class="brand-mark">LL</b><div><strong>LORD LOOK</strong><small>Reign Your Style</small></div></div>
+    <div class="header-status" role="status" aria-live="polite"><span id="account-status" class="pill">Not signed in</span><span id="counter-status" class="pill">Counter C01</span><span id="catalog-status" class="pill">Catalog not loaded</span><span id="queue-status" class="pill">0 Bills Pending Sync</span></div>
+    <div class="actions"><button id="sign-in">Sign in / Reauthorize</button><button id="setup-open" class="secondary">Setup</button></div>
+  </header>
+  <div class="toolbar"><nav aria-label="Workspace"><button data-tab="billing" class="selected">New Invoice</button><button data-tab="history">Invoices</button><button data-tab="catalog">Products & Customers</button><button data-tab="queue">Sync Queue</button></nav><div class="actions"><button id="sync-catalog">Sync Catalog</button><button id="retry-sync">Retry Sync</button><button id="export-recovery" class="secondary">Export Recovery</button></div></div>
+  <p id="notice" class="notice" role="status">Complete Setup, sign in, and sync your catalog before billing.</p>
+  <main>
+    <section id="tab-billing" class="workspace">
+      <form id="invoice-form" class="builder">
+        <article class="card"><div class="section-title"><h1>New invoice</h1><button id="new-invoice" type="button" class="secondary">Clear cart</button></div>
+          <div class="fields"><label>Counter<select id="counter"></select></label><label>Invoice date<input id="invoice-date" type="date" required></label></div>
+          <p class="muted">Number allocated when you save: <strong id="number-preview">INV-C01-YYMMDD-SEQ</strong></p>
+          <div class="fields"><label>Payment method<select id="payment-method"><option>Bank Transfer / UPI</option><option>Cash</option><option>Card</option><option>Other</option></select></label><label>Payment status<select id="payment-status"><option>PAID</option><option>UNPAID</option></select></label></div>
+        </article>
+        <article class="card"><h2>Bill to</h2><label>Find customer by name or phone<input id="customer-search" type="search" list="customer-options" autocomplete="off"><datalist id="customer-options"></datalist></label>
+          <label>Customer name<input id="customer-name" maxlength="100" required autocomplete="name"></label>
+          <div class="fields"><label>Mobile number<input id="customer-phone" type="tel" inputmode="tel" maxlength="15" required autocomplete="tel"></label><label>Address / delivery note<input id="customer-address" maxlength="180"></label></div>
+        </article>
+        <article class="card"><div class="section-title"><h2>Product line items</h2><button id="add-custom" type="button" class="secondary">+ Custom item</button></div>
+          <label>Search product or scan SKU<input id="product-search" type="search" autocomplete="off" placeholder="Name, category or SKU"></label><div id="product-results" class="search-results"></div><div id="cart"></div>
+        </article>
+        <article class="card"><h2>Totals & discount</h2><div class="fields"><label>Discount mode<select id="discount-mode"><option value="FLAT">₹ Flat</option><option value="PCT">% Percent</option></select></label><label>Discount<input id="discount" type="number" min="0" step="0.01" value="0"></label></div>
+          <dl class="totals"><div><dt>Subtotal</dt><dd id="subtotal">₹0.00</dd></div><div><dt>Discount</dt><dd id="discount-total">₹0.00</dd></div><div><dt id="tax-label">Tax included</dt><dd id="tax-total">₹0.00</dd></div><div class="grand"><dt>Total due</dt><dd id="grand-total">₹0.00</dd></div></dl>
+          <button id="generate" type="submit" class="primary full">Generate & Save Invoice</button><p class="muted">The PDF is available immediately after local saving. Google sync continues in the background.</p>
+        </article>
+      </form>
+      <aside class="preview-column"><div class="preview-title"><strong>Invoice preview</strong><span>Final PDF opens after saving</span></div><div id="preview" class="paper"></div><article id="last-bill" class="card" hidden><strong id="last-bill-label"></strong><div class="actions"><button id="download-last">Download PDF</button><button id="preview-last">Open PDF / Print</button><button id="share-last">Share PDF</button></div></article></aside>
+    </section>
+    <section id="tab-history" hidden><article class="card"><div class="section-title"><h1>Invoices</h1><button id="export-csv">Export CSV</button></div><p class="muted">Latest 200 synced invoices and recent local bills. Issued invoices are immutable here; resolve corrections through your administrator.</p><input id="history-search" type="search" aria-label="Search invoices" placeholder="Invoice number, customer or phone"><div id="history-list"></div></article></section>
+    <section id="tab-catalog" hidden><article class="card"><div class="section-title"><h1>Products & customers</h1><a id="sheet-link" target="_blank" rel="noopener">Manage in Google Sheets</a></div><p class="muted">Changes made in Google Sheets reach this counter when you Sync Catalog. Cart prices remain fixed. This schema does not contain stock quantities.</p><div id="catalog-list"></div><h2>Customer directory</h2><div id="customer-list"></div></article></section>
+    <section id="tab-queue" hidden><article class="card"><h1>Background sync queue</h1><p>Keep this browser open to sync. Export recovery data before changing devices or clearing browser storage.</p><div id="queue-list"></div></article></section>
+  </main>
+  <dialog id="setup-modal"><form id="setup-form"><h2>Connect this counter</h2><p>Use an existing Google Sheet containing the verified database tabs.</p>
+    <label>OAuth Web application Client ID<input id="setup-client" required autocomplete="off"></label><label>Spreadsheet ID<input id="setup-sheet" required autocomplete="off"></label><label>Drive PDF folder ID<input id="setup-folder" required autocomplete="off"></label><label>Counter ID<select id="setup-counter"></select></label>
+    <label class="check"><input id="setup-confirm" type="checkbox" required> This counter is assigned only to this browser/device. I will not reset its storage or reuse its counter on another device during the same day.</label>
+    <p class="muted">IDs are public configuration. Never enter an OAuth client secret. Changing destinations is blocked while bills are pending.</p><p id="setup-error" role="alert"></p><div class="actions"><button type="submit">Save setup</button><button type="button" id="setup-close" class="secondary">Close</button></div>
+  </form></dialog>
+  <noscript>JavaScript is required for billing.</noscript>
+</body></html>

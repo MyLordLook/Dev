@@ -1,0 +1,13 @@
+PASS First-run Setup Modal validates and persists configuration
+PASS Simulated GIS login, folder permission check and catalog batch render
+PASS SKU Enter adds a single line without submitting; XS/L selects correct price
+PASS Form / live invoice preview shows reference total Γé╣699.00
+PASS 390px mobile layout has no horizontal page overflow
+PASS Real Web Locks prevent a second tab from editing or billing, including dynamically rendered controls
+PASS Real Web Locks serialize 50 concurrent sequence allocations
+PASS Offline save persists atomic PDF/job snapshot, clears cart only after saving, makes zero API requests
+PASS Service-worker offline reload restores cached app, catalog and queued bill
+PASS Reauthorization retains the active customer and cart
+PASS Zero uncaught browser page errors in exercised UI paths
+PASS 17 isolated browser profiles with assigned counters issue 85 unique invoice numbers
+RESULT 12 browser checks passed. Chrome and Web Locks real; Google APIs/GIS and jsPDF engine simulated. No live OAuth or actual PDF rendering was claimed.
