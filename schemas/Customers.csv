@@ -1,1 +1,1 @@
-﻿CustomerID,CustomerName,MobileNumber,Address,TotalOrders,LastInvoiceDate,UpdatedAt
+﻿CustomerID,CustomerName,MobileNumber,Address,TotalOrders,LastInvoiceDate,UpdatedAt,Country,PinCode,AddressLine1,AddressLine2,Landmark,City,State

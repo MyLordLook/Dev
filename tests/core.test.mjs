@@ -38,7 +38,7 @@ function job(id){const inv=invoice(id);return {invoiceId:id,sheetRows:schema.mak
 await test('Inclusive reference: 799 - 100 = 699, no extra tax',()=>{const x=schema.calculate([item],100,'FLAT',{TaxMode:'INCLUSIVE',TaxRate:5});assert.equal(x.grandTotal,699);assert.equal(x.taxAmount,0);assert.equal(x.includedTax,33.29);});
 await test('Exclusive GST after percentage discount uses integer paise',()=>{const x=schema.calculate([item],10,'PCT',{TaxMode:'EXCLUSIVE',TaxRate:5});assert.equal(x.discount,79.9);assert.equal(x.taxAmount,35.96);assert.equal(x.grandTotal,755.06);});
 await test('Reject NaN, negative prices, fractional qty, excessive discounts',()=>{for(const value of [NaN,Infinity,-1])assert.throws(()=>schema.calculate([{...item,unitPrice:value}],0,'FLAT',{}));assert.throws(()=>schema.calculate([{...item,qty:1.5}],0,'FLAT',{}));assert.throws(()=>schema.calculate([item],800,'FLAT',{}));assert.throws(()=>schema.calculate([item],101,'PCT',{}));});
-await test('Zero price retained and schema widths 20 / 11 match',()=>{assert.equal(schema.calculate([{...item,unitPrice:0}],0,'FLAT',{}).grandTotal,0);const rows=schema.makeRows(invoice('I001'));assert.equal(rows.Invoices[0].length,20);assert.equal(rows.InvoiceItems[0].length,11);});
+await test('Zero price retained and schema widths 29 / 16 match',()=>{assert.equal(schema.calculate([{...item,unitPrice:0}],0,'FLAT',{}).grandTotal,0);const rows=schema.makeRows(invoice('I001'));assert.equal(rows.Invoices[0].length,29);assert.equal(rows.InvoiceItems[0].length,16);});
 await test('USER_ENTERED escapes formulas and preserves phone/date text',()=>{assert.deepEqual(schema.safeRows([['=IMPORTXML("x")','00123','2026-11-22',799]])[0],["'=IMPORTXML(\"x\")","'00123","'2026-11-22",799]);});
 await test('50 concurrent allocations are unique under the storage lock',async()=>{const ids=await Promise.all(Array.from({length:50},()=>config.allocateNumber(c,'2026-11-22')));assert.equal(new Set(ids).size,50);assert.equal(ids[0],'INV-C04-261122-001');assert.equal(ids[49],'INV-C04-261122-050');});
 await test('QuotaExceededError prevents enqueue without deleting prior jobs',()=>{const before=storage.length;storage.fail=true;assert.throws(()=>api.enqueue(job('I101')),/storage/);storage.fail=false;assert.equal(storage.length,before);});
@@ -68,6 +68,13 @@ await test('Wrong-account queue request is blocked before a write',async()=>{
 await test('Denied scope fails authorization without modifying stored cart',async()=>{
   config.writeJSON(config.PREFIX+'draft:test',{items:[item]});grantScopes=false;
   await assert.rejects(auth.authorize(true),/Both Sheets and Drive/);assert.equal(config.readJSON(config.PREFIX+'draft:test',null).items.length,1);grantScopes=true;
+});
+await test('Sign out cancels an in-flight authorization and ignores its late response',async()=>{
+  let callback;const original=window.google.accounts.oauth2.initTokenClient;
+  window.google.accounts.oauth2.initTokenClient=options=>({requestAccessToken:()=>{callback=options.callback;}});
+  const pending=auth.authorize(true);auth.clearAuth();await assert.rejects(pending,/Signed out/);
+  await callback({access_token:'LATE_TOKEN',expires_in:3600});assert.equal(auth.authState().connected,false);
+  window.google.accounts.oauth2.initTokenClient=original;
 });
 navigator.onLine=false;
 console.log(`RESULT ${passed} passed, 0 failed. Network, GIS, Web Locks and PDF engine were simulated in this suite.`);

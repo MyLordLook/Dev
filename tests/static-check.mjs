@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 const source=process.binding('natives')['internal/deps/acorn/acorn/dist/acorn'];
 if(!source)throw new Error('This checker requires a Node build with bundled Acorn; use Node 24.');
 const context={exports:{},module:{}};vm.runInNewContext(source,context);const acorn=context.exports;
-const builtins=new Set('window document navigator localStorage console fetch URL URLSearchParams Blob File AbortSignal CustomEvent Event EventTarget Error DOMException Uint8Array Number String Boolean Object Array Map Set Promise JSON Date Math RegExp Intl performance crypto structuredClone atob btoa setTimeout clearTimeout self caches confirm undefined Infinity NaN encodeURIComponent decodeURIComponent'.split(' '));
+const builtins=new Set('window document navigator localStorage console fetch URL URLSearchParams Blob File AbortSignal CustomEvent Event EventTarget Error DOMException Uint8Array Number String Boolean Object Array Map Set Promise JSON Date Math RegExp Intl performance crypto structuredClone atob btoa setTimeout clearTimeout setInterval clearInterval self caches confirm undefined Infinity NaN encodeURIComponent decodeURIComponent'.split(' '));
 let files=0,refs=0;
 for(const file of fs.readdirSync('.').filter(f=>f.endsWith('.js'))){
  const text=fs.readFileSync(file,'utf8'),ast=acorn.parse(text,{ecmaVersion:'latest',sourceType:'module',locations:true});

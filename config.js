@@ -11,7 +11,9 @@ export function writeJSON(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); }
   catch (error) { throw new Error(`Browser storage could not save data. Keep this tab open, export recovery data and free space. ${error.name}`); }
 }
-export function getConfig() { return {...DEFAULT_CONFIG, ...readJSON(PREFIX + 'config', {})}; }
+let runtimeConfig=null;
+export function getConfig() { return runtimeConfig || {...DEFAULT_CONFIG, ...readJSON(PREFIX + 'config', {})}; }
+export function setRuntimeConfig(c) {runtimeConfig={...DEFAULT_CONFIG,...c};}
 export function validateConfig(c) {
   if (!/^[0-9]+-[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(c.clientId)) throw new Error('Enter the Web application OAuth Client ID.');
   for (const k of ['spreadsheetId', 'folderId']) if (!/^[A-Za-z0-9_-]{10,}$/.test(c[k])) throw new Error(`Enter a valid ${k}; use the ID, not the URL.`);

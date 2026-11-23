@@ -1,13 +1,13 @@
 ﻿SettingKey,SettingValue,Description
-BusinessName,LORD LOOK,Source-derived default; review before use
-Tagline,Reign Your Style,Source-derived default; review before use
-AddressLine1,"BOB House, Opp.Ponmani Gardens",Source-derived default; review before use
-AddressLine2,"Uthangudi, Madurai, Tamil Nadu 625107, India",Source-derived default; review before use
-ContactLine,support@lordlook.com  |  +91 9497160097,Source-derived default; review before use
-Website,www.lordlook.com,Source-derived default; review before use
-ThankYouNote,Thank you for shopping with Lord Look.,Source-derived default; review before use
-SignatureCaption,Authorized Signature â€” Lord Look,Source-derived default; review before use
-BottomBrandText,L O R D   L O O K,Source-derived default; review before use
-TaxMode,INCLUSIVE,Source-derived default; review before use
-TaxRate,5,Source-derived default; review before use
-TaxLabel,Tax (GST 5%) included,Source-derived default; review before use
+BusinessName,LORD LOOK,Review business default before use
+Tagline,Reign Your Style,Review business default before use
+AddressLine1,"BOB House, Opp.Ponmani Gardens",Review business default before use
+AddressLine2,"Uthangudi, Madurai, Tamil Nadu 625107, India",Review business default before use
+ContactLine,support@lordlook.com  |  +91 9497160097,Review business default before use
+Website,www.lordlook.com,Review business default before use
+ThankYouNote,Thank you for shopping with Lord Look.,Review business default before use
+SignatureCaption,Authorized Signature â€” Lord Look,Review business default before use
+BottomBrandText,L O R D   L O O K,Review business default before use
+TaxMode,INCLUSIVE,Review business default before use
+TaxRate,5,Review business default before use
+TaxLabel,Tax (GST 5%) included,Review business default before use

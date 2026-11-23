@@ -1,9 +1,9 @@
 import {getConfig, SCOPES} from './config.js';
-let accessToken = '', expiresAt = 0, email = '', pending = null, client = null, lastAutomaticAttempt = 0;
+let accessToken = '', expiresAt = 0, email = '', pending = null, client = null, lastAutomaticAttempt = 0, cancelPending = null;
 export class AuthRequired extends Error { constructor(message = 'Sign in / Reauthorize Google to resume sync. Your cart is safe.') { super(message); this.name = 'AuthRequired'; } }
 const emit = () => window.dispatchEvent(new CustomEvent('authchange', {detail: authState()}));
 export function authState() { return {email, expiresAt, connected: !!accessToken && expiresAt > Date.now()}; }
-export function clearAuth() { accessToken = ''; expiresAt = 0; email = ''; client = null; emit(); }
+export function clearAuth() { if(cancelPending)cancelPending(new AuthRequired('Signed out.')); accessToken = ''; expiresAt = 0; email = ''; client = null; emit(); }
 export function authorize(interactive = true) {
   if (pending) return pending;
   if (!navigator.onLine) return Promise.reject(new AuthRequired('Offline. Bills remain queued until Google can be reached.'));
@@ -14,10 +14,11 @@ export function authorize(interactive = true) {
     let settled = false;
     const finish = (error) => {
       if (settled) return;
-      settled = true; clearTimeout(timeout);
+      settled = true; cancelPending=null; clearTimeout(timeout);
       if (error) { accessToken = ''; expiresAt = 0; emit(); reject(error); } else { emit(); resolve(accessToken); }
     };
     const timeout = setTimeout(() => finish(new AuthRequired('Google authorization timed out. Click Sign in / Reauthorize.')), 60000);
+    cancelPending=finish;
     client = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId, scope: SCOPES.join(' '), include_granted_scopes: true,
       callback: async response => {
@@ -32,7 +33,7 @@ export function authorize(interactive = true) {
           const data = await r.json();
           if (!data.user?.emailAddress) throw new Error('Google did not return an account email.');
           if (settled) return;
-          email = data.user.emailAddress;
+          email = data.user.emailAddress.trim().toLowerCase();
           finish();
         } catch (error) { finish(new AuthRequired(error.message)); }
       },

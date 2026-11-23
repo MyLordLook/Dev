@@ -1,1 +1,1 @@
-﻿InvoiceID,InvoiceNumber,InvoiceDate,CustomerID,CustomerName,CustomerPhone,CustomerAddress,PaymentMethod,PaymentStatus,Subtotal,Discount,TaxLabel,TaxAmount,GrandTotal,ItemsJSON,PdfFileId,PdfUrl,IdempotencyKey,CreatedBy,CreatedAt
+﻿InvoiceID,InvoiceNumber,InvoiceDate,CustomerID,CustomerName,CustomerPhone,CustomerAddress,PaymentMethod,PaymentStatus,Subtotal,Discount,TaxLabel,TaxAmount,GrandTotal,ItemsJSON,PdfFileId,PdfUrl,IdempotencyKey,CreatedBy,CreatedAt,OrderType,DeliveryCharges,Country,PinCode,AddressLine1,AddressLine2,Landmark,City,State

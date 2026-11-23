@@ -1,1 +1,11 @@
-{"name":"lord-look-client-billing","private":true,"version":"1.0.0","type":"module","scripts":{"test":"node tests/core.test.mjs"}}
+{
+  "name": "lord-look-billing",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/core.test.mjs && node tests/v2.test.mjs",
+    "test:browser": "node tests/browser-v2.test.mjs",
+    "test:static": "node tests/static-check.mjs"
+  }
+}

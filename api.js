@@ -12,7 +12,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export class ApiError extends Error {
   constructor(message, status, retryable = false) { super(message); this.status = status; this.retryable = retryable; }
 }
-async function request(url, options = {}) {
+export async function request(url, options = {}) {
   await sleep(Math.max(0, 1200 - (Date.now() - lastRequest)));
   lastRequest = Date.now();
   const response = await googleFetch(url, options);
@@ -29,7 +29,7 @@ async function request(url, options = {}) {
 export function loadCatalog() { return readJSON(cacheKey(getConfig().spreadsheetId), null); }
 export async function syncCatalog() {
   const c = getConfig();
-  const ranges = ['Products!A:G','Customers!A:G','Settings!A:C','Invoices!A:T','InvoiceItems!A1:K1'];
+  const ranges = ['Products!A:K','Customers!A:N','Settings!A:C','Invoices!A:AC','InvoiceItems!A1:P1'];
   const query = new URLSearchParams({valueRenderOption:'UNFORMATTED_VALUE', dateTimeRenderOption:'SERIAL_NUMBER'});
   ranges.forEach(range => query.append('ranges', range));
   const data = await request(SHEETS + encodeURIComponent(c.spreadsheetId) + '/values:batchGet?' + query);
@@ -43,15 +43,17 @@ export async function syncCatalog() {
     ids.add(id); if (sku) skus.add(sku.toLowerCase());
     let sizes; try { sizes = JSON.parse(r[4]); } catch { throw new Error('Invalid SizesJSON for ' + id); }
     if (!sizes || Array.isArray(sizes) || typeof sizes !== 'object' || !Object.keys(sizes).length || Object.values(sizes).some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Error('Invalid size prices for ' + id);
-    return {id,sku,name:String(r[2] || ''),category:String(r[3] || ''),sizes,active:r[5] !== false && String(r[5]).toUpperCase() !== 'FALSE'};
+    let colors;try {colors=JSON.parse(r[10] || '[]');}catch {throw new Error('Invalid ColorsJSON for '+id);}
+    if(!Array.isArray(colors) || colors.some(c=>typeof c!=='string'))throw new Error('ColorsJSON must be a list of color names for '+id);
+    return {raw:r,material:String(r[7] || ''),productType:String(r[8] || 'DTF'),gsm:r[9] ?? '',colors,id,sku,name:String(r[2] || ''),category:String(r[3] || ''),sizes,active:r[5] !== false && String(r[5]).toUpperCase() !== 'FALSE'};
   });
   const settings = Object.fromEntries(tables.Settings.filter(r => r[0]).map(r => [String(r[0]),r[1] ?? '']));
-  const customers = tables.Customers.filter(r=>r[0]).map(r=>({id:String(r[0]),name:String(r[1] || ''),phone:String(r[2] || ''),address:String(r[3] || ''),orders:Number(r[4] || 0)}));
+  const customers = tables.Customers.filter(r=>r[0]).map(r=>({raw:r,id:String(r[0]),name:String(r[1] || ''),phone:String(r[2] || ''),address:String(r[3] || ''),orders:Number(r[4] || 0),deliveryAddress:{country:r[7] || 'India',pin:String(r[8] || '625020'),line1:r[9] || '',line2:r[10] || '',landmark:r[11] || '',city:r[12] || 'Madurai',state:r[13] || 'Tamil Nadu'}}));
   const allInvoices = tables.Invoices.filter(r=>r[1]).map(rowToInvoice);
   // New billing contacts are derived from immutable invoice snapshots, avoiding competing customer upserts.
   const byPhone = new Map(customers.map(c=>[c.phone.replace(/\D/g,''),c]));
-  for (const inv of allInvoices) byPhone.set(inv.customerPhone.replace(/\D/g,''), {id:inv.customerId,name:inv.customerName,phone:inv.customerPhone,address:inv.customerAddress,orders:null});
-  const cache = {products,customers:[...byPhone.values()],settings,invoices:allInvoices.slice(-200).reverse(),syncedAt:new Date().toISOString(),email:authState().email,spreadsheetId:c.spreadsheetId};
+  for (const inv of allInvoices) byPhone.set(inv.customerPhone.replace(/\D/g,''), {id:inv.customerId,name:inv.customerName,phone:inv.customerPhone,address:inv.customerAddress,deliveryAddress:inv.deliveryAddress,orders:null});
+  const cache = {products,directoryCustomers:customers,customers:[...byPhone.values()],settings,invoices:allInvoices.slice(-200).reverse(),syncedAt:new Date().toISOString(),email:authState().email,spreadsheetId:c.spreadsheetId};
   writeJSON(cacheKey(c.spreadsheetId), cache);
   return cache;
 }
@@ -80,6 +82,7 @@ function finish(job) {
   history.unshift({...job.snapshot,pdfFileId:job.driveFileId,pdfUrl:job.pdfUrl,settings:job.settings});
   writeJSON(key,history.slice(0,100));
   localStorage.removeItem(jobKey(job.invoiceId));
+  window.dispatchEvent(new CustomEvent('invoicesynced',{detail:{invoiceNumber:job.snapshot.invoiceNumber,pdfUrl:job.pdfUrl}}));
   notifyQueue();
 }
 async function ensureUpload(job) {
@@ -103,7 +106,7 @@ async function ensureUpload(job) {
   job.sheetRows.Invoices[0][15]=result.id; job.sheetRows.Invoices[0][16]=result.webViewLink;
   job.uploaded=true; persist(job);
 }
-const endColumn = {Invoices:'T',InvoiceItems:'K'};
+const endColumn = {Invoices:'AC',InvoiceItems:'P'};
 async function getRows(job, table) {
   const range = table+'!A:'+endColumn[table];
   const data = await request(SHEETS+encodeURIComponent(job.spreadsheetId)+'/values/'+encodeURIComponent(range)+'?valueRenderOption=UNFORMATTED_VALUE',{expectedEmail:job.expectedEmail});
@@ -164,7 +167,7 @@ export async function flushQueue(manual = false) {
       if (!lock) return;
       for (const item of listJobs()) {
         const job=readJSON(jobKey(item.invoiceId),null);
-        if (!job || job.spreadsheetId!==getConfig().spreadsheetId) continue;
+        if (!job || job.expectedEmail!==authState().email) continue;
         if (!manual && job.status==='blocked') continue;
         if (!manual && (job.nextAttempt || 0)>Date.now()) { nextDelay=Math.min(nextDelay,job.nextAttempt-Date.now()); continue; }
         try { await processJob(job); }

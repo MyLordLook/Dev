@@ -1,1 +1,1 @@
-﻿ProductID,SKU,ProductName,Category,SizesJSON,Active,UpdatedAt
+﻿ProductID,SKU,ProductName,Category,SizesJSON,Active,UpdatedAt,ClothMaterial,ProductType,GSM,ColorsJSON

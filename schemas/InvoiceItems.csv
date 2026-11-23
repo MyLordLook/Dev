@@ -1,1 +1,1 @@
-﻿ItemRowID,InvoiceID,InvoiceNumber,LineNumber,ProductID,ProductDescription,Size,Quantity,UnitPrice,LineTotal,CreatedAt
+﻿ItemRowID,InvoiceID,InvoiceNumber,LineNumber,ProductID,ProductDescription,Size,Quantity,UnitPrice,LineTotal,CreatedAt,SKU,ClothMaterial,ProductType,GSM,Color
