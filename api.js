@@ -29,7 +29,7 @@ export async function request(url, options = {}) {
 export function loadCatalog() { return readJSON(cacheKey(getConfig().spreadsheetId), null); }
 export async function syncCatalog() {
   const c = getConfig();
-  const ranges = ['Products!A:K','Customers!A:N','Settings!A:C','Invoices!A:AC','InvoiceItems!A1:P1'];
+  const ranges = ['Products!A:L','Customers!A:N','Settings!A:C','Invoices!A:AC','InvoiceItems!A1:Q1'];
   const query = new URLSearchParams({valueRenderOption:'UNFORMATTED_VALUE', dateTimeRenderOption:'SERIAL_NUMBER'});
   ranges.forEach(range => query.append('ranges', range));
   const data = await request(SHEETS + encodeURIComponent(c.spreadsheetId) + '/values:batchGet?' + query);
@@ -45,14 +45,30 @@ export async function syncCatalog() {
     if (!sizes || Array.isArray(sizes) || typeof sizes !== 'object' || !Object.keys(sizes).length || Object.values(sizes).some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Error('Invalid size prices for ' + id);
     let colors;try {colors=JSON.parse(r[10] || '[]');}catch {throw new Error('Invalid ColorsJSON for '+id);}
     if(!Array.isArray(colors) || colors.some(c=>typeof c!=='string'))throw new Error('ColorsJSON must be a list of color names for '+id);
-    return {raw:r,material:String(r[7] || ''),productType:String(r[8] || 'DTF'),gsm:r[9] ?? '',colors,id,sku,name:String(r[2] || ''),category:String(r[3] || ''),sizes,active:r[5] !== false && String(r[5]).toUpperCase() !== 'FALSE'};
+    const mrps=JSON.parse(r[11] || '{}');
+    return {raw:r,mrps,material:String(r[7] || ''),productType:String(r[8] || 'DTF'),gsm:r[9] ?? '',colors,id,sku,name:String(r[2] || ''),category:String(r[3] || ''),sizes,active:r[5] !== false && String(r[5]).toUpperCase() !== 'FALSE'};
   });
   const settings = Object.fromEntries(tables.Settings.filter(r => r[0]).map(r => [String(r[0]),r[1] ?? '']));
   const customers = tables.Customers.filter(r=>r[0]).map(r=>({raw:r,id:String(r[0]),name:String(r[1] || ''),phone:String(r[2] || ''),address:String(r[3] || ''),orders:Number(r[4] || 0),deliveryAddress:{country:r[7] || 'India',pin:String(r[8] || '625020'),line1:r[9] || '',line2:r[10] || '',landmark:r[11] || '',city:r[12] || 'Madurai',state:r[13] || 'Tamil Nadu'}}));
   const allInvoices = tables.Invoices.filter(r=>r[1]).map(rowToInvoice);
   // New billing contacts are derived from immutable invoice snapshots, avoiding competing customer upserts.
-  const byPhone = new Map(customers.map(c=>[c.phone.replace(/\D/g,''),c]));
-  for (const inv of allInvoices) byPhone.set(inv.customerPhone.replace(/\D/g,''), {id:inv.customerId,name:inv.customerName,phone:inv.customerPhone,address:inv.customerAddress,deliveryAddress:inv.deliveryAddress,orders:null});
+  // Recover the highest issued sequence when a counter moves to a new browser.
+  const maximums=new Map();
+  for(const inv of allInvoices) {
+    const match=/^LL(\d{4})-(C\d{2})-(\d{4})$/.exec(inv.invoiceNumber);
+    if(!match)continue;
+    const [,year,counter,sequence]=match;
+    const ledger=PREFIX+'seq:'+c.spreadsheetId+':'+counter+':'+year;
+    maximums.set(ledger,Math.max(Number(sequence),maximums.get(ledger) || 0));
+  }
+  for(const [ledger,sequence] of maximums) {
+    const counter=ledger.split(':').at(-2);
+    await withLock('sequence:'+c.spreadsheetId+':'+counter,()=>{
+      if(readJSON(ledger,0)<sequence)writeJSON(ledger,sequence);
+    });
+  }
+  const byPhone = new Map(customers.map(c=>[c.phone.replace(/\D/g,'').slice(-10),c]));
+  for (const inv of allInvoices) byPhone.set(inv.customerPhone.replace(/\D/g,'').slice(-10), {id:inv.customerId,name:inv.customerName,phone:inv.customerPhone,address:inv.customerAddress,deliveryAddress:inv.deliveryAddress,orders:null});
   const cache = {products,directoryCustomers:customers,customers:[...byPhone.values()],settings,invoices:allInvoices.slice(-200).reverse(),syncedAt:new Date().toISOString(),email:authState().email,spreadsheetId:c.spreadsheetId};
   writeJSON(cacheKey(c.spreadsheetId), cache);
   return cache;
@@ -69,18 +85,31 @@ export function listJobs() {
   if (jobs.some(j=>!j || !j.invoiceId || !j.sheetRows || !j.snapshot)) throw new Error('Damaged queue data. Export recovery data and contact the admin.');
   return jobs.sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
 }
+function sessionReceipt(job,complete=false) {
+  const invoice=job.snapshot;
+  if(!invoice.session)return;
+  const key=PREFIX+'sessionBills:'+invoice.session;
+  const rows=readJSON(key,[]);
+  const stage=job.status==='review'?'Review':job.status==='blocked'?'Blocked':'Pending';
+  const record={id:invoice.id,number:invoice.invoiceNumber,counter:invoice.counter,time:invoice.createdAt,total:invoice.grandTotal,
+    drive:job.uploaded?'Saved':stage,sheets:complete || job.stages.Customers==='done'?'Saved':stage};
+  const i=rows.findIndex(row=>row.id===invoice.id);
+  if(i<0)rows.unshift(record);else rows[i]=record;
+  writeJSON(key,rows);
+}
 export function enqueue(job) {
   if (localStorage.getItem(jobKey(job.invoiceId))) throw new Error('This bill is already queued.');
-  writeJSON(jobKey(job.invoiceId), job);
+  writeJSON(jobKey(job.invoiceId), job); sessionReceipt(job);
   notifyQueue();
 }
-function persist(job) { writeJSON(jobKey(job.invoiceId), job); notifyQueue(); }
+function persist(job) { writeJSON(jobKey(job.invoiceId), job); sessionReceipt(job); notifyQueue(); }
 export function localHistory() { return readJSON(PREFIX+'history:'+getConfig().spreadsheetId, []); }
 function finish(job) {
   const key = PREFIX+'history:'+job.spreadsheetId;
   const history = readJSON(key,[]).filter(x=>x.id!==job.invoiceId);
   history.unshift({...job.snapshot,pdfFileId:job.driveFileId,pdfUrl:job.pdfUrl,settings:job.settings});
   writeJSON(key,history.slice(0,100));
+  sessionReceipt(job,true);
   localStorage.removeItem(jobKey(job.invoiceId));
   window.dispatchEvent(new CustomEvent('invoicesynced',{detail:{invoiceNumber:job.snapshot.invoiceNumber,pdfUrl:job.pdfUrl}}));
   notifyQueue();
@@ -105,8 +134,9 @@ async function ensureUpload(job) {
   job.pdfUrl=result.webViewLink;
   job.sheetRows.Invoices[0][15]=result.id; job.sheetRows.Invoices[0][16]=result.webViewLink;
   job.uploaded=true; persist(job);
+  window.dispatchEvent(new CustomEvent('driveconfirmed',{detail:job.snapshot.invoiceNumber}));
 }
-const endColumn = {Invoices:'AC',InvoiceItems:'P'};
+const endColumn = {Invoices:'AC',InvoiceItems:'Q'};
 async function getRows(job, table) {
   const range = table+'!A:'+endColumn[table];
   const data = await request(SHEETS+encodeURIComponent(job.spreadsheetId)+'/values/'+encodeURIComponent(range)+'?valueRenderOption=UNFORMATTED_VALUE',{expectedEmail:job.expectedEmail});
@@ -149,12 +179,56 @@ async function appendStage(job, table) {
     persist(job); throw error;
   }
 }
+async function directoryRows(job,tab,end) {
+  const url=SHEETS+encodeURIComponent(job.spreadsheetId)+'/values/'+tab+'!A:'+end;
+  const data=await request(url+'?valueRenderOption=UNFORMATTED_VALUE',{expectedEmail:job.expectedEmail});
+  assertHeaders(tab,data.values || []);
+  return data.values;
+}
+async function writeDirectoryRow(job,tab,row,index) {
+  const base=SHEETS+encodeURIComponent(job.spreadsheetId)+'/values/'+tab+'!A'+(index || 1);
+  const suffix=index?'?valueInputOption=RAW':':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS';
+  await request(base+suffix,{method:index?'PUT':'POST',expectedEmail:job.expectedEmail,
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({values:[row]})});
+}
+async function updateCustomer(job) {
+  const rows=await directoryRows(job,'Customers','N');
+  const key=value=>String(value).replace(/\\D/g,'').slice(-10);
+  const phone=key(job.snapshot.customerPhone);
+  const matches=rows.map((row,index)=>({row,index})).slice(1).filter(x=>key(x.row[2])===phone);
+  if(matches.length>1)throw new Error('Duplicate customer phone. Resolve duplicate rows before retry.');
+  const invoices=(await getRows(job,'Invoices')).filter(row=>key(row[5])===phone);
+  const unique=new Map(invoices.map(row=>[row[0],row]));
+  const latest=[...unique.values()].sort((a,b)=>String(b[19]).localeCompare(String(a[19])))[0];
+  if(!latest)throw new Error('Customer update is waiting for the invoice row.');
+  const inv=rowToInvoice(latest),address=inv.deliveryAddress;
+  const existing=matches[0]?.row || [];
+  const row=[existing[0] || inv.customerId,inv.customerName,'91'+phone,inv.customerAddress || existing[3] || '',
+    unique.size,inv.invoiceDate,inv.createdAt,...['country','pin','line1','line2','landmark','city','state'].map((k,i)=>address[k] || existing[7+i] || '')];
+  await writeDirectoryRow(job,'Customers',row,matches.length?matches[0].index+1:0);
+  job.stages.Customers='done';persist(job);
+}
+async function saveLog(job,action,level='INFO',details='') {
+  const id=job.invoiceId+'/'+action;
+  const rows=await directoryRows(job,'AppLogs','G');
+  if(rows.some(row=>row[6]===id))return;
+  await writeDirectoryRow(job,'AppLogs',[new Date().toISOString(),level,action,job.snapshot.invoiceNumber,job.expectedEmail,details,id],0);
+}
 async function processJob(job) {
   if (job.expectedEmail !== authState().email) throw new AuthRequired('Sign in as '+job.expectedEmail+' to sync this bill.');
   if (!job.uploaded) await ensureUpload(job);
+  if(job.snapshot.session && !job.driveLogged) {
+    await saveLog(job,'DriveSaved');
+    job.driveLogged=true;persist(job);
+  }
   for (const table of ['Invoices','InvoiceItems']) {
     await appendStage(job,table);
     if (job.stages[table]!=='done') return;
+  }
+  if(job.snapshot.session) {
+    if(job.stages.Customers!=='done')await updateCustomer(job);
+    await saveLog(job,'SheetsSaved');
+    for(const event of job.logEvents || [])await saveLog(job,event.action,event.level,event.details);
   }
   finish(job);
 }
@@ -170,9 +244,20 @@ export async function flushQueue(manual = false) {
         if (!job || job.expectedEmail!==authState().email) continue;
         if (!manual && job.status==='blocked') continue;
         if (!manual && (job.nextAttempt || 0)>Date.now()) { nextDelay=Math.min(nextDelay,job.nextAttempt-Date.now()); continue; }
-        try { await processJob(job); }
+        try {
+          if(job.snapshot.session && job.attempts) {
+            await saveLog(job,'Retry-'+job.attempts);
+          }
+          await processJob(job);
+          if(job.snapshot.session && job.status==='review')await saveLog(job,'Review','WARN',job.error);
+        }
         catch(error) {
           job.attempts=(job.attempts || 0)+1;
+          if(job.snapshot.session) {
+            const event={action:'Failure-'+job.attempts,level:'ERROR',details:String(error.message).slice(0,300)};
+            (job.logEvents ||= []).push(event);
+            try {await saveLog(job,event.action,event.level,event.details);} catch { /* Replay after reconnecting. */ }
+          }
           if (error instanceof AuthRequired) { job.status='auth'; job.error=error.message; persist(job); break; }
           if (job.status!=='review') {
             job.status=error instanceof ApiError && !error.retryable ? 'blocked':'pending';
@@ -193,7 +278,11 @@ export async function authorizeRetry(id) {
   return withLock('queue-worker',async()=>{
     const job=readJSON(jobKey(id),null); if (!job) return;
     if (Date.now()-(job.lastWriteAt || 0)<180000) throw new Error('Wait at least 3 minutes after the uncertain write before reconciliation.');
-    for (const table of ['Invoices','InvoiceItems']) if (['uncertain','inflight'].includes(job.stages[table])) {
+    if(job.snapshot.session && !job.driveLogged) {
+    await saveLog(job,'DriveSaved');
+    job.driveLogged=true;persist(job);
+  }
+  for (const table of ['Invoices','InvoiceItems']) if (['uncertain','inflight'].includes(job.stages[table])) {
       const result=await reconcile(job,table);
       if (result==='conflict') throw new Error('Conflicting rows exist. Administrator reconciliation is required.');
       job.stages[table]=result==='complete'?'done':'pending';

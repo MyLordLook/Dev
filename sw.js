@@ -1,4 +1,4 @@
-const CACHE='lordlook-shell-v2';
+const CACHE='lordlook-shell-v3-1';
 const PDF='https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js';
 const SHELL=['./','./index.html','./styles.css','./config.js','./auth.js','./api.js','./schema.js','./pdf-generator.js','./app.js','./assets.js','./defaults.js','./delivery.js','./shared.js','./catalog-editor.js'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL))));

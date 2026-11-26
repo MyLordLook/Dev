@@ -2,7 +2,7 @@ import {PREFIX,DEFAULT_CONFIG,getConfig,saveConfig,validateConfig,today,readJSON
 import {authorize,authState,clearAuth} from './auth.js';
 import {loadCatalog,syncCatalog,checkFolder,listJobs,enqueue,flushQueue,localHistory,exportRecovery,authorizeRetry} from './api.js';
 import {calculate,makeRows} from './schema.js';
-import {generatePDF,dateDisplay} from './pdf-generator.js';
+import {generatePDF,dateDisplay,invoiceTimestamp} from './pdf-generator.js';
 import {ASSETS} from './assets.js';
 import {DEFAULT_SETTINGS} from './defaults.js';
 import {loadDeployment,readShared,applyShared,isOwner,requireOwner,initializeShared,migrateSchema,schemaBackup,saveTerminal,INITIAL_DESTINATION} from './shared.js';
@@ -12,6 +12,8 @@ let accessGranted=false,sessionReady=false,signingIn=false,polling=false;
 function gate(){
   const connected=authState().connected && ((accessGranted && sessionReady) || isOwner());
   $('login-screen').hidden=connected;$('signed-shell').hidden=!connected;document.body.classList.toggle('locked',!connected);
+  if(isOwner() && config?.spreadsheetId)$('sheet-link').href='https://docs.google.com/spreadsheets/d/'+encodeURIComponent(config.spreadsheetId)+'/edit';
+  else $('sheet-link').removeAttribute('href');
   document.querySelectorAll('[data-owner]').forEach(el=>{el.hidden=!isOwner();});
   $('generate').disabled=!connected || !sessionReady || !activeTab || busy;
   if(!connected)document.querySelectorAll('dialog[open]').forEach(d=>d.close());
@@ -23,10 +25,15 @@ let config;
 try { config=getConfig(); } catch { config={...DEFAULT_CONFIG}; }
 let catalog=null, draft=null, busy=false, activeTab=false, releaseTab=null, tabTask=null, lastBill=null, lastPdf=null;
 let productsById=new Map(), customersByPhone=new Map(), catalogSearch=[];
+function sessionId() {
+  const key=PREFIX+'session:'+authState().email;
+  if(!window.sessionStorage.getItem(key))window.sessionStorage.setItem(key,crypto.randomUUID());
+  return window.sessionStorage.getItem(key);
+}
 const draftKey=()=>PREFIX+'draft:'+config.spreadsheetId;
 function notice(message,error=false) { $('notice').textContent=message;if(!authState().connected || (!accessGranted && !isOwner()))$('login-error').textContent=message;$('notice').classList.toggle('error',error); }
 function safe(action) { return (...args)=>Promise.resolve().then(()=>action(...args)).catch(error=>notice(error.message,true)); }
-function freshDraft() {return {id:'INV-'+crypto.randomUUID(),date:today(),name:'',phone:'',address:'',method:'Bank Transfer / UPI',status:'',orderType:'OFFLINE',deliveryCharges:'0',deliveryAddress:{...ADDRESS_DEFAULTS},discount:'0',discountMode:'FLAT',items:[],settings:catalog?{...DEFAULT_SETTINGS,...catalog.settings}:null};}
+function freshDraft() {return {id:'INV-'+crypto.randomUUID(),date:invoiceTimestamp(),name:'',phone:'',address:'',method:'Bank Transfer / UPI',status:'PAID',orderType:'OFFLINE',deliveryCharges:'0',deliveryAddress:{...ADDRESS_DEFAULTS},discount:'0',discountMode:'FLAT',items:[],settings:catalog?{...DEFAULT_SETTINGS,...catalog.settings}:null};}
 function saveDraft() {if(!activeTab)throw new Error('Another tab owns billing. This tab cannot change the cart.');writeJSON(draftKey(),draft);}
 async function claimTab() {
   if(releaseTab){releaseTab();releaseTab=null;await tabTask;}
@@ -41,12 +48,12 @@ async function claimTab() {
   $('invoice-form').querySelectorAll('input,select,button').forEach(el=>{el.disabled=!activeTab;});
 }
 function setDraftFields() {
-  $('invoice-date').value=draft.date;$('customer-name').value=draft.name;$('customer-phone').value=draft.phone;fillAddress('address',draft.deliveryAddress);
+  draft.date=draft.issuedDate || invoiceTimestamp();$('invoice-date').value=draft.date;$('customer-name').value=draft.name;$('customer-phone').value=draft.phone;fillAddress('address',draft.deliveryAddress);
   $('payment-method').value=draft.method;$('order-type').value=draft.orderType;$('delivery-charges').value=draft.deliveryCharges;addressRequired();$('discount').value=draft.discount;$('discount-mode').value=draft.discountMode;
   renderCart();renderPreview();
 }
 function readDraftFields() {
-  Object.assign(draft,{date:$('invoice-date').value,name:$('customer-name').value,phone:$('customer-phone').value,deliveryAddress:readAddress('address'),orderType:$('order-type').value,deliveryCharges:$('delivery-charges').value,method:$('payment-method').value,status:'',discount:$('discount').value,discountMode:$('discount-mode').value});
+  Object.assign(draft,{name:$('customer-name').value,phone:$('customer-phone').value,deliveryAddress:readAddress('address'),orderType:$('order-type').value,deliveryCharges:$('delivery-charges').value,method:$('payment-method').value,status:'PAID',discount:$('discount').value,discountMode:$('discount-mode').value});
   addressRequired();saveDraft();renderPreview();
 }
 function model() {
@@ -55,7 +62,7 @@ function model() {
 function indexCatalog() {
   productsById=new Map((catalog?.products || []).map(p=>[p.id,p]));
   catalogSearch=(catalog?.products || []).filter(p=>p.active).map(p=>({p,hay:[p.sku,p.name,p.category,p.material,p.productType,...p.colors].join(' ').toLowerCase()}));
-  customersByPhone=new Map((catalog?.customers || []).map(c=>[c.phone.replace(/\D/g,''),c]));
+  customersByPhone=new Map((catalog?.customers || []).map(c=>[c.phone.replace(/\D/g,'').slice(-10),c]));
   $('customer-options').innerHTML=(catalog?.customers || []).map(c=>`<option value="${esc(c.phone)}">${esc(c.name)}</option>`).join('');
   catalogLists(catalog);
   renderSearch();
@@ -70,14 +77,14 @@ function addItem(id) {
   if(!activeTab)throw new Error('Another tab owns billing.');
   if(draft.items.length>=100) throw new Error('Maximum 100 lines per invoice. Start a separate bill.');
   const p=productsById.get(id),size=p?(Object.hasOwn(p.sizes,'L')?'L':Object.keys(p.sizes)[0]):'';
-  draft.items.push({productId:p?.id || '',sku:p?.sku || '',material:p?.material || '',productType:p?.productType || 'DTF',gsm:p?.gsm || '',color:p?.colors?.[0] || '',description:p?.name || '',size,qty:1,unitPrice:p?p.sizes[size]:0});
+  draft.items.push({productId:p?.id || '',sku:p?.sku || '',material:p?.material || '',productType:p?.productType || 'DTF',gsm:p?.gsm || '',color:p?.colors?.[0] || '',description:p?.name || '',size,qty:1,mrp:p?.mrps?.[size] ?? null,unitPrice:p?p.sizes[size]:0});
   saveDraft();renderCart();renderPreview();
 }
 function renderCart() {
   $('cart').innerHTML=draft.items.map((it,i)=>{
     const p=productsById.get(it.productId), sizes=p?Object.keys(p.sizes):[];
     if(!sizes.includes(it.size)) sizes.push(it.size);
-    return `<div class="cart-item"><div class="section-title"><b>Item ${i+1}</b><button type="button" class="secondary" data-remove="${i}">Remove</button></div><label>Description<input data-index="${i}" data-field="description" value="${esc(it.description)}" maxlength="300" required></label><div class="item-fields"><label>Size${p?`<select data-index="${i}" data-field="size">${sizes.map(s=>`<option ${s===it.size?'selected':''}>${esc(s)}</option>`).join('')}</select>`:`<input data-index="${i}" data-field="size" maxlength="20" value="${esc(it.size)}">`}</label><label>Color${p && p.colors.length?`<select data-index="${i}" data-field="color">${[...new Set([...p.colors,it.color].filter(Boolean))].map(c=>`<option ${c===it.color?'selected':''}>${esc(c)}</option>`).join('')}</select>`:`<input data-index="${i}" data-field="color" maxlength="40" value="${esc(it.color)}">`}</label><label>Qty<input data-index="${i}" data-field="qty" type="number" min="1" max="9999" step="1" value="${esc(it.qty)}" required></label><label>Unit price<input data-index="${i}" data-field="unitPrice" type="number" min="0" step="0.01" value="${esc(it.unitPrice)}" required></label></div></div>`;
+    return `<div class="cart-item"><div class="section-title"><b>Item ${i+1}</b><button type="button" class="secondary" data-remove="${i}">Remove</button></div><label>Description<input data-index="${i}" data-field="description" value="${esc(it.description)}" maxlength="300" required></label><div class="item-fields"><label>Size${p?`<select data-index="${i}" data-field="size">${sizes.map(s=>`<option ${s===it.size?'selected':''}>${esc(s)}</option>`).join('')}</select>`:`<input data-index="${i}" data-field="size" maxlength="20" value="${esc(it.size)}">`}</label><label>Color${p && p.colors.length?`<select data-index="${i}" data-field="color">${[...new Set([...p.colors,it.color].filter(Boolean))].map(c=>`<option ${c===it.color?'selected':''}>${esc(c)}</option>`).join('')}</select>`:`<input data-index="${i}" data-field="color" maxlength="40" value="${esc(it.color)}">`}</label><label>Qty<input data-index="${i}" data-field="qty" type="number" min="1" max="9999" step="1" value="${esc(it.qty)}" required></label><label>MRP<input type="number" data-index="${i}" data-field="mrp" value="${esc(it.mrp ?? '')}" min="0" step="0.01"></label><label>Selling price<input data-index="${i}" data-field="unitPrice" type="number" min="0" step="0.01" value="${esc(it.unitPrice)}" required></label></div></div>`;
   }).join('');
   if(!activeTab)$('cart').querySelectorAll('input,select,button').forEach(el=>{el.disabled=true;});
 }
@@ -86,10 +93,10 @@ function renderPreview() {
   try{inv=model();}catch(error){$('generate').disabled=true;notice(error.message,true);return;}
   $('generate').disabled=busy || !activeTab || !catalog || !sessionReady || !authState().connected;
   const s=draft.settings || DEFAULT_SETTINGS;
-  $('number-preview').textContent=draft.number || `INV-${config.counter}-${today().replaceAll('-','').slice(2)} · allocated on save`;
+  $('number-preview').textContent=draft.number || `LL${today().slice(0,4)}-${config.counter} · allocated on save`;
   $('subtotal').textContent=currency(inv.subtotal);$('discount-total').textContent=currency(inv.discount);$('delivery-total').textContent=currency(inv.deliveryCharges);$('tax-label').textContent=inv.taxLabel;$('tax-total').textContent=inv.taxAmount?currency(inv.taxAmount):'Included';$('grand-total').textContent=currency(inv.grandTotal);
-  const rows=Array.from({length:Math.max(6,inv.items.length)},(_,i)=>{const it=inv.items[i];return `<tr><td>${i+1}</td><td>${esc(it ? [it.description,it.color].filter(Boolean).join(' / ') : '')}</td><td>${esc(it?.size || '')}</td><td>${it?.qty || ''}</td><td>${it?it.unitPrice.toFixed(2):''}</td><td>${it?it.amount.toFixed(2):''}</td></tr>`;}).join('');
-  $('preview').innerHTML=`<div class="paper-header"><img src="${ASSETS.logo.data}" alt="Lord Look"><div><h2>${esc(s.BusinessName)}</h2><i>${esc(s.Tagline)}</i><p>${esc(s.AddressLine1)}<br>${esc(s.AddressLine2)}<br>${esc(s.ContactLine)}<br>${esc(s.Website)}</p></div></div><div class="paper-meta"><h2>INVOICE</h2><div>Invoice #: ${esc(inv.invoiceNumber)}<br>Invoice Date: ${esc(dateDisplay(inv.invoiceDate))}</div></div><div class="paper-customer"><div><b class="gold">BILL TO</b><h3>${esc(inv.customerName || 'Customer name')}</h3>${esc(inv.customerPhone)}<p class="address-preview">${esc(inv.customerAddress)}</p></div><div><b class="gold">PAYMENT METHOD</b><p>${esc(inv.paymentMethod)}</p><small>${esc(inv.orderType)} ORDER</small></div></div><table class="paper-table"><thead><tr><th>#</th><th>ITEM DESCRIPTION</th><th>SIZE</th><th>QTY</th><th>UNIT PRICE</th><th>AMOUNT</th></tr></thead><tbody>${rows}</tbody></table><dl class="paper-totals"><div><dt>Subtotal</dt><dd>${inv.subtotal.toFixed(2)}</dd></div><div><dt>Discount</dt><dd>${inv.discount.toFixed(2)}</dd></div><div><dt>Delivery charges</dt><dd>${inv.deliveryCharges.toFixed(2)}</dd></div><div><dt>${esc(inv.taxLabel)}</dt><dd>${inv.taxAmount?inv.taxAmount.toFixed(2):''}</dd></div><div class="grand"><dt>TOTAL DUE</dt><dd>${currency(inv.grandTotal)}</dd></div></dl><p class="gold"><b>${esc(s.ThankYouNote)}</b></p><div class="paper-footer"><div>${!inv.orderType && inv.paymentStatus==='PAID'?`<img src="${ASSETS.paidStamp.data}" alt="Paid">`:''}</div><div><img src="${ASSETS.signature.data}" alt="Authorized signature"><hr><small>${esc(s.SignatureCaption)}</small></div></div><p class="paper-brand gold">${esc(s.BottomBrandText)}</p>`;
+  const rows=Array.from({length:inv.items.length},(_,i)=>{const it=inv.items[i];return `<tr><td>${i+1}</td><td>${esc(it ? [it.description,it.color,it.mrp==null?'':'MRP '+currency(it.mrp)].filter(Boolean).join(' / ') : '')}</td><td>${esc(it?.size || '')}</td><td>${it?.qty || ''}</td><td>${it?it.unitPrice.toFixed(2):''}</td><td>${it?it.amount.toFixed(2):''}</td></tr>`;}).join('');
+  $('preview').innerHTML=`<div class="paper-header"><img src="${ASSETS.logo.data}" alt="Lord Look"><div><h2>${esc(s.BusinessName)}</h2><i>${esc(s.Tagline)}</i><p>${esc(s.AddressLine1)}<br>${esc(s.AddressLine2)}<br>${esc(s.ContactLine)}<br>${esc(s.Website)}</p></div></div><div class="paper-meta"><h2>INVOICE</h2><div>Invoice #: ${esc(inv.invoiceNumber)}<br>Invoice Date: ${esc(dateDisplay(inv.invoiceDate))}</div></div><div class="paper-customer"><div><b class="gold">BILL TO</b><h3>${esc(inv.customerName || 'Customer name')}</h3>${esc(inv.customerPhone)}<p class="address-preview">${esc(inv.customerAddress)}</p></div><div><b class="gold">PAYMENT METHOD</b><p>${esc(inv.paymentMethod)}</p><small>${esc(inv.orderType)} ORDER</small></div></div><table class="paper-table"><thead><tr><th>#</th><th>ITEM DESCRIPTION</th><th>SIZE</th><th>QTY</th><th>UNIT PRICE</th><th>AMOUNT</th></tr></thead><tbody>${rows}</tbody></table><dl class="paper-totals"><div><dt>Subtotal</dt><dd>${inv.subtotal.toFixed(2)}</dd></div><div><dt>Discount</dt><dd>${inv.discount.toFixed(2)}</dd></div><div><dt>Delivery charges</dt><dd>${inv.deliveryCharges.toFixed(2)}</dd></div><div><dt>${esc(inv.taxLabel)}</dt><dd>${inv.taxAmount?inv.taxAmount.toFixed(2):''}</dd></div><div class="grand"><dt>TOTAL DUE</dt><dd>${currency(inv.grandTotal)}</dd></div></dl><p class="gold"><b>${esc(s.ThankYouNote)}</b></p><div class="paper-footer"><div>${'<img src="'+ASSETS.paidStamp.data+'" alt="Paid">'}</div><div><img src="${ASSETS.signature.data}" alt="Authorized signature"><hr><small>${esc(s.SignatureCaption)}</small></div></div><p class="paper-brand gold">${esc(s.BottomBrandText)}</p>`;
 }
 function history() {
   const map=new Map();for(const inv of catalog?.invoices || [])map.set(inv.id,inv);
@@ -98,6 +105,8 @@ function history() {
   return [...map.values()].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 function renderHistory() {
+  const entries=authState().connected ? readJSON(PREFIX+'sessionBills:'+sessionId(),[]) : [];
+  $('session-list').innerHTML=entries.map(i=>'<div class="list-row"><b>'+esc(i.number)+'</b><span>'+esc(i.counter)+' · '+esc(new Date(i.time).toLocaleTimeString())+' · '+currency(i.total)+'</span><span>Drive: '+esc(i.drive)+' · Sheets: '+esc(i.sheets)+'</span></div>').join('') || '<p>No invoices generated in this session.</p>';
   const q=$('history-search').value.toLowerCase();
   $('history-list').innerHTML=history().filter(i=>[i.invoiceNumber,i.customerName,i.customerPhone].join(' ').toLowerCase().includes(q)).map(inv=>`<div class="list-row"><div><b>${esc(inv.invoiceNumber)}</b><small>${esc(inv.customerName)} · ${esc(inv.invoiceDate)} · ${esc(inv.orderType || inv.paymentStatus)}${inv.pending?' · Pending sync':''}</small></div><div class="actions"><b>${currency(inv.grandTotal)}</b><button data-pdf="${esc(inv.id)}">PDF</button>${/^https:\/\/(drive|docs)\.google\.com\//.test(inv.pdfUrl || '')?`<a href="${esc(inv.pdfUrl)}" target="_blank" rel="noopener">Drive PDF</a>`:''}</div></div>`).join('') || '<p>No invoices to display.</p>';
 }
@@ -124,14 +133,16 @@ async function saveInvoice(event) {
     if(!draft.name.trim())throw new Error('Enter a customer name.');
     const digits=draft.phone.replace(/\D/g,'');
     if(!/^(?:91)?[6-9]\d{9}$/.test(digits))throw new Error('Enter a valid Indian mobile number, optionally prefixed with +91.');
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(draft.date) || new Date(draft.date+'T00:00:00Z').toISOString().slice(0,10)!==draft.date)throw new Error('Enter a valid invoice date.');
+
     if(!window.jspdf?.jsPDF)throw new Error('PDF library unavailable. Connect and reload before billing.');
     if(history().some(i=>i.id===draft.id))throw new Error('This bill was already saved. Start a new invoice.');
     busy=true;$('generate').disabled=true;
     popup=window.open('about:blank','_blank');if(popup){popup.document.title='Preparing invoice';popup.document.body.textContent='Preparing your PDF. Please keep this window open.';}
+    if(!draft.issuedDate){draft.issuedDate=invoiceTimestamp();saveDraft();}
+    calculated.invoiceDate=draft.issuedDate;
     if(!draft.number){draft.number=await allocateNumber(config);saveDraft();}
-    const phone=digits.slice(-10),customer=customersByPhone.get(phone);
-    const snapshot={...calculated,id:draft.id,idempotencyKey:draft.id,invoiceNumber:draft.number,customerName:draft.name.trim(),customerPhone:phone,customerId:customer?.id || 'CUS-'+crypto.randomUUID(),createdBy:authState().email || catalog.email,createdAt:new Date().toISOString()};
+    const phone=validateContact(draft.name,draft.phone),customer=customersByPhone.get(phone.slice(-10));
+    const snapshot={session:sessionId(),counter:config.counter,...calculated,id:draft.id,idempotencyKey:draft.id,invoiceNumber:draft.number,customerName:draft.name.trim(),customerPhone:phone,customerId:customer?.id || 'CUS-'+crypto.randomUUID(),createdBy:authState().email || catalog.email,createdAt:new Date().toISOString()};
     const settings=structuredClone(draft.settings || DEFAULT_SETTINGS),pdf=generatePDF(snapshot,settings);
     const job={invoiceId:snapshot.id,sheetRows:makeRows(snapshot),pdfBase64:pdf.pdfBase64,fileName:pdf.fileName,folderId:config.folderId,spreadsheetId:config.spreadsheetId,status:'pending',stages:{Invoices:'pending',InvoiceItems:'pending'},createdAt:snapshot.createdAt,expectedEmail:snapshot.createdBy,snapshot,settings};
     enqueue(job);
@@ -164,7 +175,7 @@ async function loadSession(){
   await checkFolder();await sync();sessionReady=true;$('counter').value=config.counter;setDraftFields();gate();
   if(!config.counterConfirmed){$('terminal-confirm').checked=false;$('terminal-counter').value=config.counter;$('terminal-modal').showModal();}
 }
-function normalizeDraft(){draft.deliveryAddress={...ADDRESS_DEFAULTS,...draft.deliveryAddress};if(draft.address && !draft.deliveryAddress.line1)draft.deliveryAddress.line1=draft.address;draft.orderType ||= 'OFFLINE';draft.deliveryCharges ??= '0';draft.status='';}
+function normalizeDraft(){draft.deliveryAddress={...ADDRESS_DEFAULTS,...draft.deliveryAddress};if(draft.address && !draft.deliveryAddress.line1)draft.deliveryAddress.line1=draft.address;draft.orderType ||= 'OFFLINE';draft.deliveryCharges ??= '0';draft.status='PAID';}
 async function pollShared(){
   if(polling || busy || !authState().connected || !navigator.onLine || !sessionReady || !activeTab)return;
   polling=true;
@@ -192,21 +203,21 @@ async function signIn(){
 function bind() {
   document.querySelectorAll('[data-order]').forEach(b=>b.addEventListener('click',safe(()=>{$('order-type').value=b.dataset.order;readDraftFields();}))); 
   $('invoice-form').addEventListener('submit',saveInvoice);
-  $('invoice-form').addEventListener('input',safe(event=>{if(event.target.dataset.field){const it=draft.items[Number(event.target.dataset.index)];it[event.target.dataset.field]=event.target.value;saveDraft();renderPreview();}else if(!['product-search','customer-search'].includes(event.target.id))readDraftFields();}));
-  $('cart').addEventListener('change',safe(event=>{if(event.target.dataset.field==='size'){const it=draft.items[Number(event.target.dataset.index)],p=productsById.get(it.productId);if(p && Object.hasOwn(p.sizes,event.target.value))it.unitPrice=p.sizes[event.target.value];saveDraft();renderCart();renderPreview();}}));
+  $('invoice-form').addEventListener('input',safe(event=>{if(event.target.dataset.field){const it=draft.items[Number(event.target.dataset.index)];it[event.target.dataset.field]=event.target.dataset.field==='mrp' && !event.target.value ? null : event.target.value;saveDraft();renderPreview();}else if(!['product-search','customer-search'].includes(event.target.id))readDraftFields();}));
+  $('cart').addEventListener('change',safe(event=>{if(event.target.dataset.field==='size'){const it=draft.items[Number(event.target.dataset.index)],p=productsById.get(it.productId);if(p && Object.hasOwn(p.sizes,event.target.value)){it.unitPrice=p.sizes[event.target.value];it.mrp=p.mrps?.[event.target.value] ?? null;}saveDraft();renderCart();renderPreview();}}));
   $('cart').addEventListener('click',safe(event=>{const button=event.target.closest('[data-remove]');if(button){draft.items.splice(Number(button.dataset.remove),1);saveDraft();renderCart();renderPreview();}}));
   $('product-search').addEventListener('input',renderSearch);
   $('product-search').addEventListener('keydown',event=>{if(event.key!=='Enter')return;event.preventDefault();try{const q=event.target.value.trim().toLowerCase(),match=catalogSearch.find(x=>x.p.sku.toLowerCase()===q);if(match){addItem(match.p.id);event.target.value='';renderSearch();}}catch(error){notice(error.message,true);}});
   $('product-results').addEventListener('click',safe(event=>{const button=event.target.closest('[data-add]');if(button)addItem(button.dataset.add);}));
   $('add-custom').addEventListener('click',safe(()=>addItem('')));
-  $('customer-search').addEventListener('change',safe(()=>{const q=$('customer-search').value.trim(),c=customersByPhone.get(q.replace(/\D/g,'')) || catalog?.customers.find(c=>c.name.toLowerCase()===q.toLowerCase());if(c){draft.name=c.name;draft.phone=c.phone;draft.deliveryAddress={...ADDRESS_DEFAULTS,...c.deliveryAddress};saveDraft();setDraftFields();}}));
+  $('customer-search').addEventListener('change',safe(()=>{const q=$('customer-search').value.trim(),c=customersByPhone.get(q.replace(/\D/g,'').slice(-10)) || catalog?.customers.find(c=>c.name.toLowerCase()===q.toLowerCase());if(c){draft.name=c.name;draft.phone=c.phone;draft.deliveryAddress={...ADDRESS_DEFAULTS,...c.deliveryAddress};saveDraft();setDraftFields();}}));
   $('customer-phone').addEventListener('change',safe(()=>{const c=customersByPhone.get($('customer-phone').value.replace(/\D/g,'').slice(-10));if(c && !$('customer-name').value){draft.name=c.name;draft.deliveryAddress={...ADDRESS_DEFAULTS,...c.deliveryAddress};saveDraft();setDraftFields();}}));
   $('new-invoice').addEventListener('click',safe(()=>{if(draft.items.length && !confirm('Clear this unsaved cart?'))return;draft=freshDraft();saveDraft();setDraftFields();}));
   $('counter').addEventListener('change',()=>{$('counter').value=config.counter;$('terminal-counter').value=config.counter;$('terminal-confirm').checked=false;$('terminal-modal').showModal();});
   $('setup-open').addEventListener('click',openSetup);$('setup-close').addEventListener('click',()=>$('setup-modal').close());$('setup-form').addEventListener('submit',saveSetup);
   $('sign-in').addEventListener('click',()=>{signIn().catch(error=>notice(error.message,true));});
   $('login-button').addEventListener('click',()=>{signIn().catch(error=>notice(error.message,true));});
-  $('sign-out').addEventListener('click',()=>{accessGranted=false;sessionReady=false;clearAuth();gate();});
+  $('sign-out').addEventListener('click',()=>{window.sessionStorage.removeItem(PREFIX+'session:'+authState().email);accessGranted=false;sessionReady=false;clearAuth();gate();});
   $('terminal-form').addEventListener('submit',event=>{event.preventDefault();try{if(!activeTab)throw new Error('Use the active billing tab.');if(draft.items.length)throw new Error('Save or clear the cart before changing counter.');saveTerminal($('terminal-counter').value,$('terminal-confirm').checked);config=getConfig();$('counter').value=config.counter;$('terminal-modal').close();renderStatus();renderPreview();}catch(error){$('terminal-error').textContent=error.message;}});
   $('catalog-products').onclick=()=>{$('products-panel').hidden=false;$('customers-panel').hidden=true;};
   $('catalog-customers').onclick=()=>{$('products-panel').hidden=true;$('customers-panel').hidden=false;};
@@ -218,6 +229,11 @@ function bind() {
     const id=$('setup-sheet').value.trim();const backup=await schemaBackup(id);download(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}),'LordLook-before-v2-'+today()+'.json');
     await migrateSchema(id);await loadSession();$('setup-modal').close();notice('Schema migrated. Products, Customers and Settings are restricted to the owner.');
   }catch(error){$('setup-error').textContent=error.message;}finally{button.disabled=false;}};
+  window.addEventListener('driveconfirmed',event=>{
+    $('sync-toast').textContent=event.detail+' · PDF saved to Drive';
+    $('sync-toast').hidden=false;
+    setTimeout(()=>{$('sync-toast').hidden=true;},10000);
+  });
   window.addEventListener('invoicesynced',event=>{if(!authState().connected)return;const message=event.detail.invoiceNumber+' confirmed saved to Google Sheets. PDF uploaded.';notice(message);$('sync-toast').textContent=message;$('sync-toast').hidden=false;setTimeout(()=>{$('sync-toast').hidden=true;},10000);});
 
   $('sync-catalog').addEventListener('click',safe(sync));$('retry-sync').addEventListener('click',safe(()=>flushQueue(true)));

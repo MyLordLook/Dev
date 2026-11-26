@@ -75,8 +75,13 @@ export async function migrateSchema(id){
     const old=data.values?.[0] || [];
     if(!old.length || old.length>headers.length || old.some((v,i)=>v!==headers[i]))throw new Error('Unexpected headers in '+tab+'. Migration stopped; do not overwrite the existing data.');
     if(sheet.properties.gridProperties.columnCount<headers.length)requests.push({appendDimension:{sheetId:sheet.properties.sheetId,dimension:'COLUMNS',length:headers.length-sheet.properties.gridProperties.columnCount}});
+    if(tab==='Customers') {
+      for(const p of sheet.protectedRanges || []) {
+        if(p.description==='Lord Look owner catalog')requests.push({deleteProtectedRange:{protectedRangeId:p.protectedRangeId}});
+      }
+    }
     updates.push({range:tab+'!A1',values:[headers]});
-    if(['Products','Customers','Settings'].includes(tab)){
+    if(['Products','Settings'].includes(tab)){
       for(const protectedRange of sheet.protectedRanges || [])requests.push({deleteProtectedRange:{protectedRangeId:protectedRange.protectedRangeId}});
       requests.push(protection(sheet.properties.sheetId,'Lord Look owner catalog'));
     }
@@ -94,7 +99,7 @@ export async function saveCatalogRecord(tab,row,original){
   const matches=rows.map((r,i)=>({r,i})).filter(x=>x.r[0]===row[0]);
   if(matches.length>1)throw new Error('Duplicate record ID in Sheet. Resolve it before editing.');
   if(tab==='Products' && rows.slice(1).some(r=>r[0]!==row[0] && String(r[1]).toLowerCase()===String(row[1]).toLowerCase()))throw new Error('SKU already exists.');
-  if(tab==='Customers' && rows.slice(1).some(r=>r[0]!==row[0] && String(r[2]).replace(/\D/g,'').slice(-10)===row[2]))throw new Error('A customer with this mobile number already exists.');
+  if(tab==='Customers' && rows.slice(1).some(r=>r[0]!==row[0] && String(r[2]).replace(/\D/g,'').slice(-10)===String(row[2]).slice(-10)))throw new Error('A customer with this mobile number already exists.');
   if(original && (!matches.length || HEADERS[tab].some((_,i)=>String(matches[0].r[i] ?? '')!==String(original[i] ?? ''))))throw new Error('This record changed since you opened it. Sync Catalog, reopen and try again.');
   if(!original && matches.length){if(row.every((v,i)=>String(v)===String(matches[0].r[i] ?? '')))return;throw new Error('Record already exists. Sync Catalog before continuing.');}
   const range=tab+'!A'+(matches.length?matches[0].i+1:'1');

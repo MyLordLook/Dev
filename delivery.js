@@ -15,5 +15,6 @@ export function validateContact(name,phone) {
   if (!String(name).trim() || String(name).length>100) throw new Error('Full name is required (maximum 100 characters).');
   const digits=String(phone).replace(/\D/g,'');
   if (!/^(?:91)?[6-9]\d{9}$/.test(digits)) throw new Error('Enter a valid Indian mobile number, optionally prefixed with +91.');
-  return digits.slice(-10);
+  if (!/^[+\d\s()-]+$/.test(phone)) throw new Error('Invalid mobile number.');
+  return '91'+digits.slice(-10);
 }

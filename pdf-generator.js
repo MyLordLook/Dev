@@ -2,6 +2,10 @@ import {ASSETS} from './assets.js';
 import {DEFAULT_SETTINGS} from './defaults.js';
 export const LAYOUT = Object.freeze({width:210,height:297,margin:8,right:202,tableTop:118,tableHeader:10,rowMin:8.5,columns:[8,17,83,108,127,165,202],bottom:285});
 const GOLD = '#B08D4A';
+export function invoiceTimestamp(instant = new Date()) {
+  const options = {timeZone:'Asia/Kolkata', day:'2-digit', month:'short', year:'numeric', hour:'numeric', minute:'2-digit', hour12:true};
+  return new Intl.DateTimeFormat('en-GB', options).format(instant).replace(/am|pm/i, period => period.toUpperCase()) + ' IST';
+}
 export function dateDisplay(value) {
   const parts=String(value).split('-');
   if(parts.length!==3) return String(value);
@@ -72,9 +76,9 @@ export function generatePDF(invoice, sourceSettings = {}, PdfClass = window.jspd
     doc.addPage();write(s.BusinessName,9,15,12,'bold');write(invoice.invoiceNumber+' / continued',201,15,9,'normal','#3A3A3A','right');y=25;tableHeader();
   }
   if(y>180) continuation(); else tableHeader();
-  const slots=Math.max(6,invoice.items.length);
+  const slots=invoice.items.length;
   for(let i=0;i<slots;i++) {
-    const item=invoice.items[i], desc=wrap(item ? [item.description,[item.sku,item.material,item.productType,item.gsm?item.gsm+' GSM':'',item.color].filter(Boolean).join(' / ')].filter(Boolean).join('\n') : '',63,9.5), size=wrap(item?.size || '',22,9);
+    const item=invoice.items[i], desc=wrap(item ? [item.description,[item.mrp == null ? '' : 'MRP '+Number(item.mrp).toFixed(2),item.sku,item.material,item.productType,item.gsm?item.gsm+' GSM':'',item.color].filter(Boolean).join(' / ')].filter(Boolean).join('\n') : '',63,9.5), size=wrap(item?.size || '',22,9);
     const height=Math.max(8.5,desc.length*4.1+3,size.length*4+3);
     if(y+height>265) continuation();
     doc.setFillColor(i%2?'#F4EFE3':'#FFFFFF');doc.rect(8,y,194,height,'F');
@@ -86,8 +90,8 @@ export function generatePDF(invoice, sourceSettings = {}, PdfClass = window.jspd
     }
     y+=height;
   }
-  if(y+111>290) {doc.addPage();write(s.BusinessName+' / '+invoice.invoiceNumber,9,16,12,'bold');y=23;}
-  let totalsY=doc.getNumberOfPages()===1?Math.max(192,y+10):y+10;
+  if(y+110>290) {doc.addPage();write(s.BusinessName+' / '+invoice.invoiceNumber,9,16,12,'bold');y=23;}
+  let totalsY=y+10;
   write('Subtotal',153,totalsY,10,'normal','#3A3A3A','right');write(invoice.subtotal.toFixed(2),198,totalsY,10,'normal','#000000','right');
   write('Discount',153,totalsY+8,10,'normal','#3A3A3A','right');write(invoice.discount.toFixed(2),198,totalsY+8,10,'normal','#000000','right');
   write('Delivery charges',153,totalsY+16,10,'normal','#3A3A3A','right');write(Number(invoice.deliveryCharges || 0).toFixed(2),198,totalsY+16,10,'normal','#000000','right');
@@ -95,7 +99,7 @@ export function generatePDF(invoice, sourceSettings = {}, PdfClass = window.jspd
   doc.setFillColor('#000000');doc.rect(101,totalsY+28,101,11,'F');write('TOTAL DUE',154,totalsY+35.3,12,'bold','#FFFFFF','right');write('₹'+invoice.grandTotal.toFixed(2),198,totalsY+35.3,12,'bold','#FFFFFF','right');
   const footerY=totalsY+55;
   lines(s.ThankYouNote,9,footerY,114,9.5,'bold',GOLD);
-  if(!invoice.orderType && invoice.paymentStatus==='PAID') {const stamp=ASSETS.paidStamp;doc.addImage(stamp.data,'JPEG',17,footerY+5,48,48*stamp.height/stamp.width,'paid');}
+  {const stamp=ASSETS.paidStamp;doc.addImage(stamp.data,'JPEG',17,footerY+5,48,48*stamp.height/stamp.width,'paid');}
   const sig=ASSETS.signature;doc.addImage(sig.data,'JPEG',143,footerY+3,28,28*sig.height/sig.width,'signature');
   doc.setDrawColor('#3A3A3A');doc.line(126,footerY+26,193,footerY+26);
   write(s.SignatureCaption,126,footerY+31,8,'italic','#6E6E6E');write(s.BottomBrandText,105,Math.min(289,footerY+45),9,'bold',GOLD,'center');

@@ -29,10 +29,10 @@ export async function withLock(name, action, options = {}) {
 export async function allocateNumber(c, date = today()) {
   validateConfig(c);
   return withLock('sequence:' + c.spreadsheetId + ':' + c.counter, () => {
-    const key = PREFIX + 'seq:' + c.spreadsheetId + ':' + c.counter + ':' + date;
+    const key = PREFIX + 'seq:' + c.spreadsheetId + ':' + c.counter + ':' + date.slice(0,4);
     const previous = readJSON(key, 0);
-    if (!Number.isSafeInteger(previous) || previous < 0 || previous >= 999999) throw new Error('Invalid or exhausted counter sequence. Contact the administrator.');
+    if (!Number.isSafeInteger(previous) || previous < 0 || previous >= 9999) throw new Error('Invalid or exhausted counter sequence. Contact the administrator.');
     writeJSON(key, previous + 1);
-    return `INV-${c.counter}-${date.replaceAll('-', '').slice(2)}-${String(previous + 1).padStart(3, '0')}`;
+    return `LL${date.slice(0,4)}-${c.counter}-${String(previous + 1).padStart(4, '0')}`;
   });
 }
